@@ -1,0 +1,773 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Fogo Allocations 批量查询（SVM / EVM）</title>
+<style>
+  :root{
+    --bg:#f7f8fb; --paper:#fff; --ink:#1f2937; --muted:#6b7280;
+    --line:#e5e7eb; --brand:#2563eb; --ok:#16a34a; --err:#dc2626; --warn:#b45309;
+    --radius:12px; --shadow:0 8px 28px rgba(0,0,0,.06);
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --font: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font);line-height:1.55}
+  .wrap{max-width:980px;margin:32px auto;padding:0 16px}
+  h1{margin:0 0 16px;font-size:20px;font-weight:800}
+  .card{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px}
+  textarea{
+    width:100%;min-height:160px;border:1px solid var(--line);border-radius:10px;resize:vertical;
+    padding:10px;background:#fff;font-family:var(--mono);font-size:13px
+  }
+  .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+  .btn{appearance:none;border:1px solid var(--line);background:var(--brand);color:#fff;
+    padding:10px 16px;border-radius:10px;font-weight:700;cursor:pointer;text-decoration:none;display:inline-block}
+  .btn.secondary{background:#6b7280}
+  .btn.ghost{background:#fff;color:#1f2937}
+  .btn.link{background:#eef2ff;color:#1d4ed8;border-color:#dbe3ff}
+  .btn[disabled]{opacity:.6;cursor:not-allowed}
+  .hint{color:var(--muted);font-size:12px}
+  .summary{margin-top:10px}
+  .summary b{font-weight:800}
+  .countdown{margin-left:8px;padding:2px 8px;border:1px solid var(--line);border-radius:999px;background:#fafafa;font-size:12px;color:#374151}
+  table{width:100%;border-collapse:collapse}
+  thead th{background:#fafafa;border-bottom:1px solid var(--line);text-align:left;padding:10px;font-size:13px;color:#374151}
+  thead th.sortable{cursor:pointer;user-select:none}
+  tbody td{border-bottom:1px solid var(--line);padding:10px;font-size:14px;vertical-align:top}
+  tbody tr:nth-child(odd){background:#fcfcfd}
+  .addr{font-family:var(--mono);word-break:break-all}
+  .num{text-align:right;font-variant-numeric:tabular-nums}
+  .status{display:flex;align-items:center;gap:6px;white-space:nowrap}
+  .dot{width:18px;height:18px;border-radius:4px;display:inline-grid;place-items:center}
+  .ok{background:#e8f7ee;border:1px solid #bfe8cb;color:var(--ok)}
+  .err{background:#fdeaea;border:1px solid #f3c3c3;color:var(--err)}
+  .pending{background:#eef2ff;border:1px solid #dbe3ff;color:#4f46e5}
+  .warn{background:#fff7ed;border:1px solid #fde68a;color:var(--warn)}
+  .text-err{color:var(--err);font-weight:700}
+  .num-err{color:var(--err)}
+  .blur{filter: blur(6px)}
+  .small{font-size:12px}
+  .select{border:1px solid var(--line);border-radius:8px;background:#fff;padding:6px 10px}
+  .field{
+    display:flex;align-items:center;gap:8px;
+    padding:6px 10px;border:1px solid var(--line);border-radius:10px;background:#fff
+  }
+  .field label{font-size:12px;color:#374151}
+  .field input, .field select{
+    border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px;
+    font-family:var(--mono);background:#fff
+  }
+  .field input{width:100px}
+  .field input.w120{width:120px}
+  .field select{font-family:var(--font)}
+  .pill{
+    display:inline-block;padding:2px 8px;border-radius:999px;border:1px solid var(--line);
+    background:#fafafa;font-size:12px;color:#374151
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Fogo Allocations 批量查询（SVM / EVM）</h1>
+
+  <div class="card">
+    <!-- 显眼位置：官方入口 + 作者推特 -->
+    <div class="row" style="margin-bottom:10px">
+      <a href="https://claim.fogo.io/" target="_blank" rel="noopener" class="btn link">官方查询入口传送门</a>
+      <a href="https://x.com/0xXIAOc" target="_blank" rel="noopener" class="btn link">作者推特 @0xXIAOc</a>
+      <span class="pill" id="typeTip">EVM 地址会自动转小写</span>
+      <span class="hint" id="envTip"></span>
+    </div>
+
+    <div class="row" style="width:100%">
+      <div style="flex:1">
+        <label for="addrs" id="addrLabel" class="hint">钱包地址（每行一个）</label>
+        <textarea id="addrs" placeholder="0x....&#10;0x...."></textarea>
+      </div>
+    </div>
+
+    <div class="row" style="margin-top:10px">
+      <button id="start" class="btn">开始查询</button>
+      <button id="stop" class="btn secondary" disabled>停止</button>
+      <span class="hint" id="limitHint">分批并发 + 间隔请求（可调）</span>
+      <span id="cd" class="countdown" style="display:none">下一批：30s</span>
+    </div>
+
+    <!-- 参数：类型 / 批大小 / 间隔 / decimals / symbol -->
+    <div class="row" style="margin-top:10px">
+      <div class="field">
+        <label for="identityType">类型</label>
+        <select id="identityType">
+          <option value="evm_wallet" selected>EVM (evm_wallet)</option>
+          <option value="svm_wallet">SVM (svm_wallet)</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="batchSize">每批</label>
+        <input id="batchSize" type="number" min="1" max="20" step="1" value="3"/>
+      </div>
+
+      <div class="field">
+        <label for="intervalSec">间隔(秒)</label>
+        <input id="intervalSec" class="w120" type="number" min="0" max="600" step="1" value="30"/>
+      </div>
+
+      <div class="field">
+        <label for="decimals">Decimals</label>
+        <input id="decimals" type="number" min="0" max="18" step="1" value="9"/>
+      </div>
+
+      <div class="field">
+        <label for="symbol">Symbol</label>
+        <input id="symbol" class="w120" type="text" value="FOGO"/>
+      </div>
+
+      <label class="hint"><input id="showRaw" type="checkbox"> 显示原始值</label>
+    </div>
+
+    <!-- 筛选 / 导出 / 复制 / 隐私 -->
+    <div class="row" style="margin-top:10px">
+      <label class="hint"><input id="onlyOk" type="checkbox"> 只看有额度的</label>
+      <label class="hint"><input id="hideAddr" type="checkbox"> 隐藏地址</label>
+      <span class="hint">导出选项：</span>
+      <label class="hint"><input id="exportOnlyOk" type="checkbox" checked> 仅导出有额度</label>
+      <button id="btnCsv" class="btn ghost" disabled>导出 CSV</button>
+      <span class="hint">复制有额度地址：</span>
+      <select id="sepSel" class="select small">
+        <option value="nl">换行分隔</option>
+        <option value="comma">逗号分隔</option>
+      </select>
+      <button id="btnCopy" class="btn ghost" disabled>复制</button>
+    </div>
+
+    <div id="summary" class="summary">
+      输入地址数量 <b>0</b> 个 · 已完成 <b>0</b> 个 · 有额度 <b>0</b> 个 · 总分配 <b>0</b> FOGO
+    </div>
+
+    <div class="hint" style="margin-top:6px">
+      前端请求（同源）：<span style="font-family:var(--mono)">GET /api/allocations?identity=...&amp;identityType=...</span>
+    </div>
+  </div>
+
+  <div class="card" id="tableCard" style="margin-top:16px;display:none">
+    <table>
+      <thead>
+        <tr>
+          <th style="width:60px">#</th>
+          <th>地址</th>
+          <th id="thAmount" class="num sortable" style="width:220px">总分配</th>
+          <th style="width:140px">状态</th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    <div class="hint" style="margin-top:8px">
+      提示：鼠标悬停在“总分配”上可查看 allocations 分类明细（若有）。
+    </div>
+  </div>
+</div>
+
+<script>
+  // ✅ 关键：这里是你自己的 Vercel Proxy（同源）
+  const API_ENDPOINT = "/api/allocations";
+
+  const ETH_RE_ANY = /^0x[a-fA-F0-9]{40}$/;
+  const ETH_RE_LOW = /^0x[a-f0-9]{40}$/;
+  const SVM_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+
+  const $ = s => document.querySelector(s);
+
+  const addrsEl = $('#addrs'), startBtn = $('#start'), stopBtn = $('#stop');
+  const tbody = $('#tbody'), tableCard = $('#tableCard'), summary = $('#summary');
+  const cd = $('#cd'), thAmount = $('#thAmount');
+
+  const onlyOkEl = $('#onlyOk'), hideAddrEl = $('#hideAddr');
+  const btnCsv = $('#btnCsv'), exportOnlyOkEl = $('#exportOnlyOk');
+  const btnCopy = $('#btnCopy'), sepSel = $('#sepSel');
+
+  const batchSizeEl = $('#batchSize');
+  const intervalSecEl = $('#intervalSec');
+  const decimalsEl = $('#decimals');
+  const symbolEl = $('#symbol');
+  const showRawEl = $('#showRaw');
+  const limitHint = $('#limitHint');
+
+  const identityTypeEl = $('#identityType');
+  const addrLabel = $('#addrLabel');
+  const typeTip = $('#typeTip');
+  const envTip = $('#envTip');
+
+  let aborter = null;
+  let countdownTimer = null;
+  let nextBatchStart = 0;
+
+  let rows = [];
+  let results = [];  // { address, identityType, eligible, totalRaw(BigInt), allocations[], status }
+  let sortAmountAsc = null;
+
+  function clamp(n, min, max){ return Math.max(min, Math.min(max, n)); }
+
+  function parseAddresses(text){
+    return text.replace(/\r/g,'\n')
+      .split(/[\s,;]+/)
+      .map(s=>s.trim())
+      .filter(Boolean);
+  }
+
+  function getType(){ return identityTypeEl.value; }
+
+  function normalizeAddr(a, type){
+    a = (a || '').trim();
+    if (type === 'evm_wallet') return a.toLowerCase();
+    return a;
+  }
+
+  function validAddr(a, type){
+    if (type === 'evm_wallet') return ETH_RE_LOW.test(a);
+    return SVM_RE.test(a);
+  }
+
+  function getBatchSize(){
+    const v = parseInt(batchSizeEl.value, 10);
+    return clamp(Number.isFinite(v) ? v : 3, 1, 20);
+  }
+  function getIntervalMs(){
+    const v = parseFloat(intervalSecEl.value);
+    const sec = Number.isFinite(v) ? v : 30;
+    return Math.max(0, Math.round(sec * 1000));
+  }
+  function getDecimals(){
+    const v = parseInt(decimalsEl.value, 10);
+    return clamp(Number.isFinite(v) ? v : 9, 0, 18);
+  }
+  function getSymbol(){
+    return (symbolEl.value || 'FOGO').trim() || 'FOGO';
+  }
+  function showRaw(){ return !!showRawEl.checked; }
+
+  function setBusy(b){
+    startBtn.disabled = b;
+    stopBtn.disabled = !b;
+    batchSizeEl.disabled = b;
+    intervalSecEl.disabled = b;
+    identityTypeEl.disabled = b;
+  }
+
+  function startCountdown(ms){
+    cd.style.display = 'inline-block';
+    nextBatchStart = Date.now() + ms;
+    if (countdownTimer) clearInterval(countdownTimer);
+    countdownTimer = setInterval(()=>{
+      const left = Math.max(0, nextBatchStart - Date.now());
+      cd.textContent = `下一批：${String(Math.ceil(left/1000)).padStart(2,'0')}s`;
+      if (left <= 0){
+        clearInterval(countdownTimer);
+        cd.style.display = 'none';
+      }
+    }, 250);
+  }
+
+  function updateAmountHeader(){
+    let label = '总分配';
+    if (sortAmountAsc === true) label += ' ▲';
+    else if (sortAmountAsc === false) label += ' ▼';
+    thAmount.textContent = label;
+    thAmount.classList.add('sortable');
+  }
+
+  function safeBigInt(s){
+    try{
+      if (typeof s !== 'string') s = String(s ?? '0');
+      if (!/^\d+$/.test(s)) return 0n;
+      return BigInt(s);
+    }catch{
+      return 0n;
+    }
+  }
+
+  function formatUnits(raw, decimals){
+    raw = (typeof raw === 'bigint') ? raw : safeBigInt(raw);
+    decimals = clamp(decimals|0, 0, 18);
+
+    const neg = raw < 0n;
+    const x = neg ? -raw : raw;
+
+    if (decimals === 0) return (neg ? '-' : '') + x.toString();
+
+    const base = 10n ** BigInt(decimals);
+    const intPart = x / base;
+    const fracPart = x % base;
+
+    let frac = fracPart.toString().padStart(decimals, '0');
+    frac = frac.replace(/0+$/,'');
+    const out = frac.length ? `${intPart.toString()}.${frac}` : intPart.toString();
+    return (neg ? '-' : '') + out;
+  }
+
+  function renderAmount(rawBig){
+    if (showRaw()) return (typeof rawBig === 'bigint' ? rawBig : safeBigInt(rawBig)).toString();
+    return formatUnits(rawBig, getDecimals());
+  }
+
+  function setHint(){
+    limitHint.textContent = `每批 ${getBatchSize()} 个 · 间隔 ${Math.round(getIntervalMs()/1000)} 秒（可调）`;
+  }
+
+  function setTypeUI(){
+    const t = getType();
+    if (t === 'evm_wallet'){
+      addrLabel.textContent = '钱包地址（每行一个，EVM 0x…；查询时自动转小写）';
+      addrsEl.placeholder = '0x9ed15383940cc380faef0a75edace507cc775f22\n0x....';
+      typeTip.textContent = 'EVM 地址会自动转小写';
+    }else{
+      addrLabel.textContent = '钱包地址（每行一个，SVM / Solana Base58）';
+      addrsEl.placeholder = 'Gmm2PTX48kzNAMWjv13uvaJwHG8XoX3jJubzGhLMJPBx\n...';
+      typeTip.textContent = 'SVM 地址保持原样';
+    }
+  }
+
+  function chunkIndices(len, size){
+    const out = [];
+    for (let i=0;i<len;i+=size){
+      const idxs = [];
+      for (let k=0;k<size && (i+k)<len;k++) idxs.push(i+k);
+      out.push(idxs);
+    }
+    return out;
+  }
+
+  function buildAllocTooltip(allocs){
+    if (!Array.isArray(allocs) || allocs.length === 0) return '';
+    const dec = getDecimals();
+    const sym = getSymbol();
+    const lines = allocs.map(a=>{
+      const raw = a.amountRaw ?? 0n;
+      const f = formatUnits(raw, dec);
+      return `${a.category || 'Unknown'}: ${showRaw() ? raw.toString() : (f + ' ' + sym)} (raw: ${raw.toString()})`;
+    });
+    return lines.join('\n');
+  }
+
+  function setSummaryFromResults(){
+    const total = results.length;
+    const done = results.filter(r => r && r.status !== 'queued' && r.status !== 'running').length;
+    const eligible = results.filter(r => r && r.eligible === true).length;
+
+    let sumRaw = 0n;
+    for (const r of results){
+      if (r && r.eligible === true && typeof r.totalRaw === 'bigint') sumRaw += r.totalRaw;
+    }
+    summary.innerHTML =
+      `输入地址数量 <b>${total}</b> 个 · 已完成 <b>${done}</b> 个 · 有额度 <b>${eligible}</b> 个 · 总分配 <b>${renderAmount(sumRaw)}</b> ${getSymbol()}`;
+  }
+
+  function addRow(idx, address){
+    const tr = document.createElement('tr');
+
+    const tdIdx = document.createElement('td');
+    tdIdx.textContent = String(idx + 1);
+
+    const tdAddr = document.createElement('td');
+    tdAddr.className = 'addr';
+    tdAddr.textContent = address;
+
+    const tdAmt = document.createElement('td');
+    tdAmt.className = 'num';
+    tdAmt.textContent = '—';
+
+    const tdStat = document.createElement('td');
+    tdStat.className = 'status';
+    tdStat.innerHTML = `<span class="dot warn">•</span><span> 排队中</span>`;
+
+    tr.appendChild(tdIdx);
+    tr.appendChild(tdAddr);
+    tr.appendChild(tdAmt);
+    tr.appendChild(tdStat);
+
+    tbody.appendChild(tr);
+
+    return {
+      idx, address, tr, idxCell: tdIdx, addrEl: tdAddr, amtEl: tdAmt, statEl: tdStat,
+      setPending(){ this.statEl.innerHTML = `<span class="dot pending">…</span><span class="muted"> 查询中</span>`; },
+      setOK(totalRaw, allocations){
+        this.amtEl.classList.remove('num-err');
+        this.amtEl.textContent = renderAmount(totalRaw);
+        this.amtEl.title = buildAllocTooltip(allocations);
+        this.statEl.innerHTML = `<span class="dot ok">✔</span><span> 有额度</span>`;
+      },
+      setNo(){
+        this.amtEl.classList.remove('num-err');
+        this.amtEl.textContent = renderAmount(0n);
+        this.amtEl.title = '';
+        this.statEl.innerHTML = `<span class="dot err">✖</span><span> 无额度</span>`;
+      },
+      setFail(msg='失败'){
+        this.amtEl.classList.add('num-err');
+        this.amtEl.textContent = renderAmount(0n);
+        this.amtEl.title = msg || '';
+        this.statEl.innerHTML = `<span class="dot err">✖</span><span class="text-err" title="${String(msg).replace(/"/g,'&quot;')}"> 失败</span>`;
+      },
+      setStop(){
+        this.statEl.innerHTML = `<span class="dot err">✖</span><span class="text-err"> 已停止</span>`;
+      }
+    };
+  }
+
+  // ===== 请求（同源 /api/allocations）=====
+  async function fetchOnce(identity, identityType, signal){
+    const url = new URL(API_ENDPOINT, window.location.origin);
+    url.searchParams.set('identity', identity);
+    url.searchParams.set('identityType', identityType);
+
+    const res = await fetch(url.toString(), {
+      method:'GET',
+      headers:{ 'accept':'application/json' },
+      cache:'no-store',
+      signal
+    });
+
+    const text = await res.text();
+
+    // 代理/上游可能限流时会返回 HTML/文本；这里做个特征判断
+    const is1015 = text.includes('Error 1015') || text.includes('You are being rate limited');
+    if (res.status === 429 || is1015) throw new Error(is1015 ? 'CF_1015' : 'HTTP_429');
+    if (!res.ok) throw new Error(`HTTP_${res.status}`);
+
+    let json;
+    try{ json = JSON.parse(text); }
+    catch{ throw new Error('JSON_PARSE_ERROR'); }
+
+    const totalRaw = safeBigInt(json?.totalAmount ?? '0');
+    const allocations = Array.isArray(json?.allocations)
+      ? json.allocations.map(a => ({
+          category: String(a?.category ?? ''),
+          amountRaw: safeBigInt(a?.amount ?? '0')
+        }))
+      : [];
+
+    const eligible = totalRaw > 0n;
+    return { eligible, totalRaw, allocations };
+  }
+
+  function updateExportButtons(){
+    const anyDone = results.some(r => r && r.status !== 'queued');
+    const anyOk = results.some(r => r && r.eligible === true);
+    btnCsv.disabled = !anyDone;
+    btnCopy.disabled = !anyOk;
+  }
+
+  function applyView(){
+    const onlyOk = onlyOkEl.checked;
+
+    let idxs = results.map((_,i)=> i);
+    if (onlyOk) idxs = idxs.filter(i => results[i]?.eligible === true);
+
+    if (sortAmountAsc !== null){
+      idxs.sort((a,b)=>{
+        const ra = results[a]?.totalRaw ?? 0n;
+        const rb = results[b]?.totalRaw ?? 0n;
+        return ra === rb ? 0 : (ra < rb ? -1 : 1);
+      });
+      if (sortAmountAsc === false) idxs.reverse();
+    }
+
+    rows.forEach(r => r.tr.style.display = 'none');
+    idxs.forEach((i, orderIdx)=>{
+      const r = rows[i];
+      r.tr.style.display = '';
+      r.idxCell.textContent = String(orderIdx + 1);
+      tbody.appendChild(r.tr);
+    });
+
+    rows.forEach(r => r.addrEl.classList.toggle('blur', hideAddrEl.checked));
+
+    // 参数变化后重绘金额
+    for (let i=0;i<results.length;i++){
+      const r = results[i];
+      if (!r) continue;
+      if (r.status === 'OK'){
+        rows[i].amtEl.textContent = renderAmount(r.totalRaw);
+        rows[i].amtEl.title = buildAllocTooltip(r.allocations);
+      }else if (r.status === 'NO'){
+        rows[i].amtEl.textContent = renderAmount(0n);
+        rows[i].amtEl.title = '';
+      }else if (r.status === 'FAIL' || r.status === 'STOP'){
+        rows[i].amtEl.textContent = renderAmount(0n);
+      }
+    }
+
+    updateExportButtons();
+    updateAmountHeader();
+    setSummaryFromResults();
+    setHint();
+  }
+
+  function collectForExport(onlyOk){
+    const dec = getDecimals();
+    const sym = getSymbol();
+
+    const out = results.map((r,i)=>{
+      if (!r) return null;
+      const alloc = Array.isArray(r.allocations) ? r.allocations : [];
+      const allocSimple = alloc.map(a => ({
+        category: a.category,
+        amount_raw: (a.amountRaw ?? 0n).toString(),
+        amount_fmt: formatUnits(a.amountRaw ?? 0n, dec)
+      }));
+      return {
+        index: i + 1,
+        address: r.address,
+        identityType: r.identityType,
+        eligible: !!r.eligible,
+        status: r.status,
+        total_raw: (r.totalRaw ?? 0n).toString(),
+        total_fmt: formatUnits(r.totalRaw ?? 0n, dec),
+        symbol: sym,
+        allocations: JSON.stringify(allocSimple)
+      };
+    }).filter(Boolean);
+
+    return onlyOk ? out.filter(x => x.eligible) : out;
+  }
+
+  function toCsv(rows){
+    const headers = ['index','address','identityType','eligible','status','total_raw','total_fmt','symbol','allocations'];
+    const esc = v => {
+      v = (v == null) ? '' : String(v);
+      return /[",\n]/.test(v) ? `"${v.replace(/"/g,'""')}"` : v;
+    };
+    return [headers.join(','), ...rows.map(r => headers.map(h => esc(r[h])).join(','))].join('\n');
+  }
+
+  async function runBatch(indices){
+    const controllers = indices.map(()=> new AbortController());
+    const onAbort = () => controllers.forEach(c => c.abort());
+    aborter.signal.addEventListener('abort', onAbort, { once:true });
+
+    indices.forEach(i => {
+      rows[i].setPending();
+      results[i].status = 'running';
+    });
+
+    const settled = await Promise.all(indices.map((i, k) =>
+      fetchOnce(results[i].address, results[i].identityType, controllers[k].signal)
+        .then(r => ({ ok:true, res:r, i }))
+        .catch(e => ({ ok:false, err:e, i }))
+    ));
+
+    for (const s of settled){
+      if (aborter.signal.aborted) continue;
+
+      if (s.ok){
+        if (s.res.eligible){
+          rows[s.i].setOK(s.res.totalRaw, s.res.allocations);
+          results[s.i] = { ...results[s.i], eligible:true, totalRaw:s.res.totalRaw, allocations:s.res.allocations, status:'OK' };
+        }else{
+          rows[s.i].setNo();
+          results[s.i] = { ...results[s.i], eligible:false, totalRaw:0n, allocations:s.res.allocations, status:'NO' };
+        }
+      }else{
+        rows[s.i].setFail(s.err?.message || '失败');
+        results[s.i] = { ...results[s.i], eligible:false, totalRaw:0n, allocations:[], status:'FAIL' };
+      }
+    }
+
+    applyView();
+  }
+
+  async function runAll(){
+    const batchSize = getBatchSize();
+    const intervalMs = getIntervalMs();
+    const groups = chunkIndices(results.length, batchSize);
+
+    for (let g=0; g<groups.length; g++){
+      if (aborter.signal.aborted) break;
+
+      const batchStart = Date.now();
+      await runBatch(groups[g]);
+
+      if (g < groups.length - 1 && !aborter.signal.aborted){
+        const elapsed = Date.now() - batchStart;
+        const waitMs = Math.max(0, intervalMs - elapsed);
+        if (waitMs > 0){
+          startCountdown(waitMs);
+          await new Promise(r => setTimeout(r, waitMs));
+        }
+      }
+    }
+  }
+
+  function resetUI(){
+    tbody.innerHTML = '';
+    tableCard.style.display = 'none';
+    rows = [];
+    results = [];
+    sortAmountAsc = null;
+    updateAmountHeader();
+    btnCsv.disabled = true;
+    btnCopy.disabled = true;
+    cd.style.display = 'none';
+    if (countdownTimer) clearInterval(countdownTimer);
+    setSummaryFromResults();
+    setHint();
+  }
+
+  // ===== 事件 =====
+  startBtn.addEventListener('click', async ()=>{
+    resetUI();
+
+    const t = getType();
+    const rawList = parseAddresses(addrsEl.value);
+
+    const list = [];
+    const seen = new Set();
+
+    for (const raw of rawList){
+      // ✅ 先规范化（EVM 小写）
+      const addr = normalizeAddr(raw, t);
+
+      // ✅ EVM 允许用户输入大小写：先 lower 再用 ETH_RE_LOW 校验
+      if (t === 'evm_wallet'){
+        if (!ETH_RE_ANY.test(raw.trim())) continue;       // 原输入像不像 0x...
+        if (!validAddr(addr, t)) continue;                // 规范化后严格校验
+      }else{
+        if (!validAddr(addr, t)) continue;
+      }
+
+      const key = (t === 'evm_wallet') ? addr : addr;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      list.push(addr);
+    }
+
+    if (list.length === 0){
+      alert(t === 'evm_wallet'
+        ? '请粘贴至少一个有效 EVM 地址（0x 开头，40 位 hex；大小写都可，会自动转小写）'
+        : '请粘贴至少一个有效 SVM/Solana Base58 地址（常见 32~44 位）'
+      );
+      return;
+    }
+
+    tableCard.style.display = 'block';
+
+    list.forEach((addr, i)=>{
+      rows.push(addRow(i, addr));
+      results.push({
+        address: addr,
+        identityType: t,
+        eligible: null,
+        totalRaw: 0n,
+        allocations: [],
+        status: 'queued'
+      });
+    });
+
+    applyView();
+
+    aborter = new AbortController();
+    setBusy(true);
+
+    try{
+      await runAll();
+    }catch(e){
+      if (e?.name !== 'AbortError') console.error(e);
+    }finally{
+      setBusy(false);
+      cd.style.display = 'none';
+      if (countdownTimer) clearInterval(countdownTimer);
+      applyView();
+    }
+  });
+
+  stopBtn.addEventListener('click', ()=>{
+    if (aborter) aborter.abort();
+
+    for (let i=0;i<results.length;i++){
+      const r = results[i];
+      if (!r) continue;
+      if (r.status === 'queued' || r.status === 'running'){
+        rows[i].setStop();
+        results[i].status = 'STOP';
+      }
+    }
+
+    cd.style.display='none';
+    if (countdownTimer) clearInterval(countdownTimer);
+    applyView();
+  });
+
+  onlyOkEl.addEventListener('change', applyView);
+  hideAddrEl.addEventListener('change', applyView);
+  showRawEl.addEventListener('change', applyView);
+  decimalsEl.addEventListener('change', applyView);
+  symbolEl.addEventListener('input', applyView);
+
+  thAmount.addEventListener('click', ()=>{
+    sortAmountAsc = (sortAmountAsc === null) ? false : !sortAmountAsc;
+    applyView();
+  });
+
+  btnCsv.addEventListener('click', ()=>{
+    const data = collectForExport(exportOnlyOkEl.checked);
+    if (data.length === 0) return;
+
+    const csv = toCsv(data);
+    const blob = new Blob([csv], {type:'text/csv;charset=utf-8'});
+    const a = Object.assign(document.createElement('a'), {
+      href: URL.createObjectURL(blob),
+      download: 'fogo_allocations_results.csv'
+    });
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 0);
+  });
+
+  btnCopy.addEventListener('click', async ()=>{
+    const okAddrs = results.filter(r => r && r.eligible === true).map(r => r.address);
+    if (okAddrs.length === 0){
+      alert('没有“有额度”的地址');
+      return;
+    }
+    const sep = (sepSel.value === 'comma') ? ',' : '\n';
+    const text = okAddrs.join(sep);
+
+    try{
+      await navigator.clipboard.writeText(text);
+      alert(`已复制 ${okAddrs.length} 个有额度地址`);
+    }catch{
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      alert(`已复制 ${okAddrs.length} 个有额度地址`);
+    }
+  });
+
+  identityTypeEl.addEventListener('change', setTypeUI);
+
+  // 环境提示：如果不是 http(s) 打开，提醒用户（file:// 下同源代理不可用）
+  (function(){
+    const proto = window.location.protocol;
+    if (proto !== 'http:' && proto !== 'https:'){
+      envTip.textContent = '提示：请用 Vercel 域名或本地服务器打开（file:// 无法访问 /api/allocations）';
+    }else{
+      envTip.textContent = '';
+    }
+  })();
+
+  // init
+  updateAmountHeader();
+  setHint();
+  setTypeUI();
+  setSummaryFromResults();
+
+  // 默认示例（EVM）
+  addrsEl.value = "0x9ed15383940cc380faef0a75edace507cc775f22";
+</script>
+</body>
+</html>
