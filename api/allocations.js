@@ -1,25 +1,18 @@
-// /pages/api/allocations.js  （Next.js）
-// 或 /api/allocations.js      （Vercel Functions + ESM）
+// /api/allocations.js  (Vercel Functions - CommonJS)
 
-export default async function handler(req, res) {
-  // CORS（同域不需要，但留着更稳；也方便你未来从别的域调这个 proxy）
+module.exports = async function handler(req, res) {
+  // CORS（同域不需要，但留着更稳）
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  if (req.method === "OPTIONS") {
-    return res.status(204).end();
-  }
+  if (req.method === "OPTIONS") return res.status(204).end();
 
   try {
-    // 兼容 identity / address 两种参数名
     const q = req.query || {};
     const identityRaw = String((q.identity ?? q.address ?? "")).trim();
     let identityType = String((q.identityType ?? q.type ?? "")).trim();
 
-    // 允许不传 identityType 时自动推断（可选）
-    // 0x... => evm_wallet
-    // Base58(32~44) => svm_wallet
     const ETH_RE = /^0x[a-fA-F0-9]{40}$/;
     const SVM_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
@@ -27,13 +20,14 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Missing identity/address" });
     }
 
+    // ✅ identityType 不传就自动识别
     if (!identityType) {
       if (ETH_RE.test(identityRaw)) identityType = "evm_wallet";
       else if (SVM_RE.test(identityRaw)) identityType = "svm_wallet";
       else {
         return res.status(400).json({
-          error: "Missing identityType and cannot infer type",
-          hint: "Pass identityType=evm_wallet or svm_wallet",
+          error: "Invalid identity (cannot infer type)",
+          hint: "Use EVM 0x... or SVM Base58",
         });
       }
     }
@@ -45,14 +39,14 @@ export default async function handler(req, res) {
       });
     }
 
-    // 关键：EVM 地址强制小写（你要求的）
+    // ✅ EVM 强制小写
     const identity =
       identityType === "evm_wallet"
         ? identityRaw.toLowerCase()
         : identityRaw;
 
-    // 再做一次格式校验（避免乱传）
-    if (identityType === "evm_wallet" && !ETH_RE.test(identity)) {
+    // ✅ 再校验一遍
+    if (identityType === "evm_wallet" && !/^0x[a-f0-9]{40}$/.test(identity)) {
       return res.status(400).json({ error: "Invalid EVM address" });
     }
     if (identityType === "svm_wallet" && !SVM_RE.test(identity)) {
@@ -67,7 +61,7 @@ export default async function handler(req, res) {
     const resp = await fetch(upstream, {
       method: "GET",
       headers: {
-        "accept": "application/json",
+        accept: "application/json",
         "user-agent": "Mozilla/5.0 Fogo-Allocations-Proxy",
       },
     });
@@ -79,7 +73,7 @@ export default async function handler(req, res) {
       resp.headers.get("content-type") || "application/json; charset=utf-8"
     );
 
-    // 缓存 30 秒，防止频繁刷接口（可自行调大/调小/或 no-store）
+    // 缓存 30 秒（可删）
     res.setHeader("Cache-Control", "s-maxage=30, stale-while-revalidate=60");
 
     return res.status(resp.status).send(text);
@@ -89,4 +83,4 @@ export default async function handler(req, res) {
       detail: String(e?.message || e),
     });
   }
-}
+};
